@@ -1,9 +1,5 @@
-import atexit
 import csv
-import os
-import signal
 import subprocess
-import sys
 import threading
 from datetime import date, datetime
 from pathlib import Path
@@ -13,35 +9,13 @@ import rumps
 from AppKit import NSWorkspace
 from Foundation import NSObject
 
+from singleton import SingletonLock
+
 WORK_SECONDS = 20 * 60
 BREAK_SECONDS = 25
 SNOOZE_SECONDS = 1 * 60
 
-LOCKFILE = Path("/tmp/eye-strain-timer.lock")
 LOG_FILE = Path.home() / ".eye-strain-timer" / "log.csv"
-
-
-def _cleanup_lock():
-    LOCKFILE.unlink(missing_ok=True)
-
-
-def ensure_singleton():
-    if LOCKFILE.exists():
-        try:
-            pid = int(LOCKFILE.read_text().strip())
-            os.kill(pid, 0)
-            print(f"Already running (PID {pid}). Exiting.")
-            sys.exit(0)
-        except (ProcessLookupError, ValueError):
-            pass
-    LOCKFILE.write_text(str(os.getpid()))
-    atexit.register(_cleanup_lock)
-
-    def _sigterm(*_):
-        _cleanup_lock()
-        os._exit(0)
-
-    signal.signal(signal.SIGTERM, _sigterm)
 
 
 def log_break(result: str):
@@ -252,8 +226,11 @@ class EyeStrainTimer(rumps.App):
         self._update_display()
 
     def _quit(self, _sender):
-        LOCKFILE.unlink(missing_ok=True)
+        _singleton_lock.release()
         rumps.quit_application()
+
+
+_singleton_lock = SingletonLock(Path("/tmp/eye-strain-timer.lock"))
 
 
 if __name__ == "__main__":
@@ -263,5 +240,6 @@ if __name__ == "__main__":
     parser.add_argument("--break-time", type=int, default=BREAK_SECONDS, help="Override break duration (seconds)")
     args = parser.parse_args()
 
-    ensure_singleton()
+    if not _singleton_lock.acquire():
+        exit(1)
     EyeStrainTimer(work_seconds=args.work, break_seconds=args.break_time).run()

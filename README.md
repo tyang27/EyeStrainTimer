@@ -60,21 +60,35 @@ stateDiagram-v2
 
 **Language / framework**: Python 3.9+, [`rumps`](https://github.com/jaredks/rumps) for the menu bar UI.
 
+**Dependencies**:
+- **rumps** — handles menu bar lifecycle, menus, and update callbacks
+- **pyobjc-core + pyobjc-framework-Cocoa** — Cocoa bridging for macOS system integration (sleep/wake notifications, NSObject subclassing)
+- **py2app** — packages the Python app into a standalone `.app` bundle for distribution and easy launching from Spotlight/Applications folder
+
 **Break popup flow**: a background thread runs `osascript` to show native macOS dialogs. The thread sets a `_popup_response` flag (`"done"` or `"snooze"`) which the main tick loop reads on the next tick — keeping all state mutations on the main thread.
 
-**Sleep / wake detection**: `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` via PyObjC. A `SleepWakeObserver` NSObject subclass registers for these and calls back into the app.
+**Sleep / wake detection**: `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` via [PyObjC](https://pyobjc.readthedocs.io/). A `SleepWakeObserver` NSObject subclass registers for these and calls back into the app.
 
 **Singleton**: on launch, writes PID to `/tmp/eye-strain-timer.lock`. If the lockfile exists and the PID is alive, the new process exits. Lockfile is removed via `atexit` and a `SIGTERM` handler (so `pkill` cleans up correctly).
 
 **Break log**: append-only CSV at `~/.eye-strain-timer/log.csv`. Columns: ISO 8601 timestamp, result. Today's counts are loaded at startup and maintained in memory to avoid per-second file reads.
 
+**Building the app**: to create a standalone `.app` bundle:
+```bash
+python setup.py py2app
+```
+Output appears in `dist/Eye\ Strain\ Timer.app`. Can be moved to `/Applications` or launched directly.
+
 ## Project Structure
 
 ```
-src/app.py        # main app
-tst/test_app.py   # unit tests (pytest)
-restart.sh        # kill + relaunch helper
+src/app.py           # main app
+src/singleton.py     # file-based singleton lock (swappable mechanism)
+tst/test_app.py      # app unit tests (pytest)
+tst/test_singleton.py # singleton unit tests (pytest)
+teardown.sh          # kill app and remove lock
 requirements.txt
+setup.py             # py2app configuration for building .app bundle
 ```
 
 ## Setup
@@ -88,13 +102,21 @@ python src/app.py
 
 ## Development
 
-Override the work timer to test break flow quickly:
+Run the app directly with an optional custom work timer:
 
 ```bash
-./restart.sh --work 60       # 1-minute work timer
-./restart.sh --work 10       # 10-second work timer
-./restart.sh                 # normal 20-minute timer
+python src/app.py --work 60       # 1-minute work timer
+python src/app.py --work 10       # 10-second work timer
+python src/app.py                 # normal 20-minute timer
 ```
+
+To clean up a running instance:
+
+```bash
+./teardown.sh
+```
+
+## Testing
 
 Run tests:
 
@@ -102,6 +124,19 @@ Run tests:
 source .venv/bin/activate
 python -m pytest tst/ -v
 ```
+
+**Test coverage**: 
+- **Singleton lock** — acquiring/releasing, stale lock detection, already-running detection (including permission errors), atexit registration
+- **Log and count functions** — CSV append, file creation, today's counts (filtering by date)
+- **State machine** — initial state, break prompt triggering, popup responses (`done` / `snooze`), pause/resume, reset, countdown tick
+- **Edge cases** — behavior when paused, pending break, or at zero remaining
+
+**Not covered**: 
+- Sleep/wake observer integration (requires NSNotificationCenter mocking)
+- UI rendering (rumps app lifecycle)
+- SIGTERM signal handler (can't easily invoke via test harness)
+
+**Singleton design**: extracted into `src/singleton.py` for testability and future replacement with socket-based or fcntl-based locking.
 
 ## Log Format
 
